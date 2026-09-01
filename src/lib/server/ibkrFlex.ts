@@ -100,15 +100,17 @@ export async function fetchStatement(
   referenceCode: string,
   url: string = STMT_URL,
 ): Promise<FetchOutcome> {
-  const xml = await get(url, { t: token, q: referenceCode, v: VERSION });
-  // A ready statement is a <FlexQueryResponse>; anything else is the envelope.
-  if (/<FlexQueryResponse\b/i.test(xml)) return { status: "ready", xml };
-
-  const env = parseEnvelope(xml);
-  const code = env.errorCode;
-  if (code && SERVER_BUSY.has(code)) return { status: "pending", retryAfterMs: 1500, code };
-  if (code && CLIENT_THROTTLED.has(code)) return { status: "pending", retryAfterMs: 10000, code };
-  throw new FlexError(env.errorMessage || "Flex GetStatement failed", code);
+  const body = await get(url, { t: token, q: referenceCode, v: VERSION });
+  // Not-ready / error is always a small <FlexStatementResponse> envelope. A ready
+  // statement is either <FlexQueryResponse> XML or a CSV (queries can output either).
+  if (/<FlexStatementResponse\b/i.test(body)) {
+    const env = parseEnvelope(body);
+    const code = env.errorCode;
+    if (code && SERVER_BUSY.has(code)) return { status: "pending", retryAfterMs: 1500, code };
+    if (code && CLIENT_THROTTLED.has(code)) return { status: "pending", retryAfterMs: 10000, code };
+    throw new FlexError(env.errorMessage || "Flex GetStatement failed", code);
+  }
+  return { status: "ready", xml: body };
 }
 
 // ---- XML -> executions -> round-trip trades -------------------------------
@@ -147,43 +149,121 @@ function normalizeDateTime(tradeDate: string, dateTime: string): { date: string;
   return { date, time };
 }
 
+// Build one execution from already-extracted field strings. Shared by the XML
+// and CSV parsers so both produce identical results.
+//
+// P&L handling: IBKR's fifoPnlRealized is realized P&L *before* commissions and
+// is multiplier-correct (right for options/futures). When it is present we feed
+// the engine a per-fill NET value (fifoPnlRealized + ibCommission, commission is
+// negative) so the round-trip's net matches IBKR exactly and gross = net + fees.
+// When it is absent (e.g. a bare Trade Confirmation query) we fall back to pnl=0
+// and let the engine compute gross from fill prices (equities-correct).
+function makeExec(f: {
+  symbol: string;
+  buySell: string;
+  tradePrice: string;
+  quantity: string;
+  ibCommission: string;
+  fifoPnlRealized: string; // "" means the field was absent
+  tradeDate: string;
+  dateTime: string;
+  sourceLabel: string;
+}): FlexExec | null {
+  const buySell = f.buySell.toUpperCase();
+  if (!buySell || !f.tradePrice) return null;
+  const symbol = f.symbol.toUpperCase();
+  if (!symbol) return null;
+  const { date, time } = normalizeDateTime(f.tradeDate, f.dateTime);
+  if (!date) return null;
+  const qty = Math.abs(num(f.quantity));
+  if (qty <= 0) return null;
+
+  const commission = num(f.ibCommission); // negative in IBKR
+  const hasFifo = f.fifoPnlRealized.trim() !== "";
+  return {
+    time,
+    symbol,
+    side: buySell, // "BUY"/"SELL" — sideDelta() understands these
+    price: num(f.tradePrice),
+    qty,
+    fee: Math.abs(commission),
+    pnl: hasFifo ? num(f.fifoPnlRealized) + commission : 0,
+    trade_date: date,
+    source_file: f.sourceLabel,
+  };
+}
+
 /** Pull <Trade …/> and <TradeConfirm …/> elements into executions. */
 export function parseFlexExecutions(xml: string, sourceLabel: string): FlexExec[] {
   const execs: FlexExec[] = [];
   const elements = xml.match(/<(?:Trade|TradeConfirm)\b[^>]*\/?>/gi) || [];
   for (const el of elements) {
-    // Only individual fills carry a buySell + tradePrice; skip summary rows.
-    const buySell = attr(el, "buySell").toUpperCase();
-    const priceRaw = attr(el, "tradePrice") || attr(el, "price");
-    if (!buySell || !priceRaw) continue;
-
-    const symbol = (attr(el, "symbol") || attr(el, "underlyingSymbol")).toUpperCase();
-    if (!symbol) continue;
-
-    const { date, time } = normalizeDateTime(attr(el, "tradeDate"), attr(el, "dateTime"));
-    if (!date) continue;
-
-    const qty = Math.abs(num(attr(el, "quantity")));
-    if (qty <= 0) continue;
-
-    execs.push({
-      time,
-      symbol,
-      side: buySell, // "BUY"/"SELL" — sideDelta() understands these
-      price: num(priceRaw),
-      qty,
-      fee: Math.abs(num(attr(el, "ibCommission") || attr(el, "commission"))),
-      // pnl=0 → the round-trip engine computes gross from fill prices and
-      // subtracts commissions for net. We intentionally do NOT use IBKR's
-      // fifoPnlRealized: it is realized P&L *before* commissions, so routing it
-      // through the "net P&L" path would double-count / mis-sign fees. Computing
-      // from prices is deterministic and matches the DAS behavior. (Caveat:
-      // options/futures multipliers aren't applied here — verify on real data
-      // if you trade non-equities.)
-      pnl: 0,
-      trade_date: date,
-      source_file: sourceLabel,
+    const ex = makeExec({
+      symbol: attr(el, "symbol") || attr(el, "underlyingSymbol"),
+      buySell: attr(el, "buySell"),
+      tradePrice: attr(el, "tradePrice") || attr(el, "price"),
+      quantity: attr(el, "quantity"),
+      ibCommission: attr(el, "ibCommission") || attr(el, "commission"),
+      fifoPnlRealized: attr(el, "fifoPnlRealized"),
+      tradeDate: attr(el, "tradeDate"),
+      dateTime: attr(el, "dateTime"),
+      sourceLabel,
     });
+    if (ex) execs.push(ex);
+  }
+  return execs;
+}
+
+/** Minimal RFC-4180 CSV line splitter (handles quotes + escaped quotes). */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { field += '"'; i++; } else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") { out.push(field); field = ""; }
+    else field += c;
+  }
+  out.push(field);
+  return out;
+}
+
+/** Parse an IBKR Flex CSV statement's EXECUTION rows into executions. */
+export function parseFlexCsv(text: string, sourceLabel: string): FlexExec[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const header = splitCsvLine(lines[0]);
+  const col = new Map<string, number>();
+  header.forEach((h, i) => col.set(h.trim(), i));
+  const at = (row: string[], name: string) => {
+    const i = col.get(name);
+    return i != null && i < row.length ? row[i] : "";
+  };
+  const hasLod = col.has("LevelOfDetail");
+
+  const execs: FlexExec[] = [];
+  for (let r = 1; r < lines.length; r++) {
+    const row = splitCsvLine(lines[r]);
+    // When the statement has a LevelOfDetail column, only EXECUTION rows are the
+    // individual fills we round-trip; other levels are summaries/lots/orders.
+    if (hasLod && at(row, "LevelOfDetail") !== "EXECUTION") continue;
+    const ex = makeExec({
+      symbol: at(row, "Symbol") || at(row, "UnderlyingSymbol"),
+      buySell: at(row, "Buy/Sell"),
+      tradePrice: at(row, "TradePrice"),
+      quantity: at(row, "Quantity"),
+      ibCommission: at(row, "IBCommission"),
+      fifoPnlRealized: at(row, "FifoPnlRealized"),
+      tradeDate: at(row, "TradeDate"),
+      dateTime: at(row, "DateTime"),
+      sourceLabel,
+    });
+    if (ex) execs.push(ex);
   }
   return execs;
 }
@@ -202,10 +282,15 @@ export interface FlexImportPreview {
   label: string;
 }
 
-/** Turn a ready Flex statement into the same preview shape the DAS UI renders. */
-export function buildFlexPreview(xml: string): FlexImportPreview {
-  const queryName = attr(xml.match(/<FlexQueryResponse\b[^>]*>/i)?.[0] || "", "queryName");
-  const execs = parseFlexExecutions(xml, queryName || "IBKR");
+/** Turn a ready Flex statement (XML or CSV) into the DAS-shaped preview. */
+export function buildFlexPreview(statement: string): FlexImportPreview {
+  const isXml = /<FlexQueryResponse\b/i.test(statement);
+  const queryName = isXml
+    ? attr(statement.match(/<FlexQueryResponse\b[^>]*>/i)?.[0] || "", "queryName")
+    : "";
+  const execs = isXml
+    ? parseFlexExecutions(statement, queryName || "IBKR")
+    : parseFlexCsv(statement, "IBKR");
   // matchRoundTrips takes the DAS Execution shape; ours is structurally identical.
   const trades = matchRoundTrips(execs as never);
 
@@ -227,7 +312,7 @@ export function buildFlexPreview(xml: string): FlexImportPreview {
     net_pnl_total: round2(valid.reduce((a, t) => a + t.net_pnl, 0)),
     // Fingerprint on the raw statement AND on the trades, so re-syncing the same
     // day is idempotent even if IBKR reorders/re-times identical fills.
-    fingerprint: fingerprintFiles([[label, xml]]),
+    fingerprint: fingerprintFiles([[label, statement]]),
     trade_fingerprint: fingerprintTrades(valid as unknown as Record<string, unknown>[]),
     label,
   };
