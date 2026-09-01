@@ -147,6 +147,7 @@ export const api = {
     fingerprint?: string;
     trade_fingerprint?: string;
     label?: string;
+    source?: "das" | "ibkr";
   }) =>
     request<{ created: number; net_pnl_total: number; import_batch_id: number }>(
       "/api/import/das/commit",
@@ -155,6 +156,19 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+  ibkrRequest: () =>
+    request<{ reference_code: string; url: string }>("/api/import/ibkr/request", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  ibkrFetch: (ref: string, url?: string) => {
+    const q = new URLSearchParams({ ref });
+    if (url) q.set("url", url);
+    return request<
+      | { status: "pending"; retry_after_ms: number; code: string | null }
+      | ({ status: "ready" } & import("../types").DasImportPreview)
+    >(`/api/import/ibkr/fetch?${q}`);
+  },
   listImports: () =>
     request<{
       imports: import("../types").ImportBatch[];

@@ -39,7 +39,7 @@ export function fingerprintTrades(trades: Record<string, unknown>[]): string {
 export interface Batch {
   id: number;
   account_id: number;
-  source: "das" | "csv";
+  source: "das" | "csv" | "ibkr";
   fingerprint: string;
   trade_fingerprint: string | null;
   label: string;
@@ -87,7 +87,7 @@ export async function listBatches(accountId = 1): Promise<Batch[]> {
 }
 
 export async function createBatch(opts: {
-  source: "das" | "csv";
+  source: "das" | "csv" | "ibkr";
   fingerprint: string;
   label: string;
   trade_count: number;
@@ -139,7 +139,12 @@ export async function deleteBatch(batchId: number, accountId = 1) {
 }
 
 function isImportedNote(notes: string | null): boolean {
-  return !!notes && (notes.startsWith("Imported from DAS") || notes.startsWith("Imported from CSV"));
+  return (
+    !!notes &&
+    (notes.startsWith("Imported from DAS") ||
+      notes.startsWith("Imported from CSV") ||
+      notes.startsWith("Imported from IBKR"))
+  );
 }
 
 export async function clearAllImports(accountId = 1) {

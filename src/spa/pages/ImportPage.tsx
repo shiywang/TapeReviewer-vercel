@@ -5,7 +5,8 @@ import { formatMoney, pnlClass } from "../lib/format";
 import type { DasImportPreview } from "../types";
 
 export default function ImportPage() {
-  const [mode, setMode] = useState<"das" | "generic">("das");
+  const [mode, setMode] = useState<"das" | "ibkr" | "generic">("das");
+  const [syncStatus, setSyncStatus] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
   const [dasPreview, setDasPreview] = useState<DasImportPreview | null>(null);
@@ -34,6 +35,43 @@ export default function ImportPage() {
     }
   };
 
+  // IBKR Flex: kick off SendRequest, then poll GetStatement until the statement
+  // is generated. Reuses the DAS preview + commit path (same round-trip engine).
+  const runIbkr = async () => {
+    setBusy(true);
+    setError("");
+    setResult("");
+    setPreview(null);
+    setDasPreview(null);
+    setSyncStatus("Requesting statement…");
+    try {
+      const { reference_code, url } = await api.ibkrRequest();
+      const deadline = Date.now() + 90_000;
+      for (let attempt = 1; ; attempt++) {
+        const res = await api.ibkrFetch(reference_code, url);
+        if (res.status === "ready") {
+          setDasPreview(res);
+          setSyncStatus("");
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error("IBKR statement not ready after 90s — try again shortly.");
+        }
+        setSyncStatus(
+          res.code === "1018"
+            ? "IBKR is throttling requests, waiting…"
+            : `Generating statement… (poll ${attempt})`,
+        );
+        await new Promise((r) => setTimeout(r, res.retry_after_ms || 1500));
+      }
+    } catch (err) {
+      setSyncStatus("");
+      setError(err instanceof Error ? err.message : "IBKR sync failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const commitDas = async () => {
     if (!dasPreview) return;
     if (dasPreview.already_imported) {
@@ -46,6 +84,7 @@ export default function ImportPage() {
     setError("");
     try {
       const res = await api.commitDas({
+        source: mode === "ibkr" ? "ibkr" : "das",
         fingerprint: dasPreview.fingerprint,
         trade_fingerprint: dasPreview.trade_fingerprint,
         label: dasPreview.label,
@@ -130,6 +169,7 @@ export default function ImportPage() {
         {(
           [
             ["das", "DAS Trader"],
+            ["ibkr", "IBKR sync"],
             ["generic", "Generic CSV"],
           ] as const
         ).map(([id, label]) => (
@@ -146,19 +186,40 @@ export default function ImportPage() {
         ))}
       </div>
 
-      {mode === "das" ? (
+      {mode === "das" || mode === "ibkr" ? (
         <div className="space-y-4">
-          <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-signal/40 bg-signal/5 px-4 py-10 hover:bg-signal/10">
-            <span className="font-display text-lg font-bold text-signal">Drop one or more DAS day CSVs</span>
-            <span className="mt-1 text-sm text-muted">e.g. 6-26.csv, 7-1.csv — multi-select supported</span>
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              multiple
-              className="hidden"
-              onChange={(e) => runDas(e.target.files)}
-            />
-          </label>
+          {mode === "das" && (
+            <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-signal/40 bg-signal/5 px-4 py-10 hover:bg-signal/10">
+              <span className="font-display text-lg font-bold text-signal">Drop one or more DAS day CSVs</span>
+              <span className="mt-1 text-sm text-muted">e.g. 6-26.csv, 7-1.csv — multi-select supported</span>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                multiple
+                className="hidden"
+                onChange={(e) => runDas(e.target.files)}
+              />
+            </label>
+          )}
+
+          {mode === "ibkr" && (
+            <div className="rounded-xl border-2 border-dashed border-signal/40 bg-signal/5 px-4 py-8 text-center">
+              <div className="font-display text-lg font-bold text-signal">Sync from Interactive Brokers</div>
+              <p className="mx-auto mt-1 max-w-md text-sm text-muted">
+                Pulls your configured Flex Query over the IBKR Flex Web Service and matches fills into
+                round-trip trades. Fastest with a Trade Confirmation Flex Query.
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={runIbkr}
+                className="mt-4 rounded-lg bg-signal px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {busy ? "Syncing…" : "Sync now"}
+              </button>
+              {syncStatus && <p className="mt-2 text-xs font-mono text-muted">{syncStatus}</p>}
+            </div>
+          )}
 
           {dasPreview && (
             <div className="rounded-xl border border-line bg-surface p-5 shadow-panel">
@@ -170,9 +231,13 @@ export default function ImportPage() {
               )}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="font-display text-lg font-bold">DAS preview</h2>
+                  <h2 className="font-display text-lg font-bold">
+                    {mode === "ibkr" ? "IBKR preview" : "DAS preview"}
+                  </h2>
                   <p className="text-sm text-muted">
-                    {dasPreview.files.length} files · {dasPreview.execution_count} fills · {dasPreview.valid_count} trades
+                    {mode === "ibkr"
+                      ? `${dasPreview.execution_count} fills · ${dasPreview.valid_count} trades`
+                      : `${dasPreview.files.length} files · ${dasPreview.execution_count} fills · ${dasPreview.valid_count} trades`}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -218,7 +283,9 @@ export default function ImportPage() {
             </div>
           )}
         </div>
-      ) : (
+      ) : null}
+
+      {mode === "generic" && (
         <>
           <div className="rounded-xl border border-line bg-surface p-5 shadow-panel">
             <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-line px-4 py-10 hover:border-signal/40 hover:bg-paper/50">

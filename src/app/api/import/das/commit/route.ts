@@ -33,9 +33,12 @@ export async function POST(req: NextRequest) {
       fingerprint?: string;
       trade_fingerprint?: string;
       label?: string;
+      source?: "das" | "ibkr";
     };
     if (!payload.trades?.length) return httpError("No trades to import", 400);
     const accountId = payload.account_id ?? 1;
+    const source = payload.source === "ibkr" ? "ibkr" : "das";
+    const brokerName = source === "ibkr" ? "IBKR" : "DAS Trader";
 
     const tradeFp =
       payload.trade_fingerprint ||
@@ -44,7 +47,7 @@ export async function POST(req: NextRequest) {
     const label =
       payload.label ||
       [...new Set(payload.trades.map((t) => t.source_file).filter(Boolean))].sort().join(", ") ||
-      "DAS import";
+      `${brokerName} import`;
 
     for (const key of [fingerprint, tradeFp]) {
       const existing = await findBatchByFingerprint(key, accountId);
@@ -59,7 +62,7 @@ export async function POST(req: NextRequest) {
     let batch;
     try {
       batch = await createBatch({
-        source: "das",
+        source,
         fingerprint,
         trade_fingerprint: tradeFp,
         label,
@@ -78,8 +81,8 @@ export async function POST(req: NextRequest) {
     const created: Record<string, unknown>[] = [];
     for (const row of payload.trades) {
       const note = row.source_file
-        ? `Imported from DAS Trader (${row.source_file})`
-        : "Imported from DAS Trader";
+        ? `Imported from ${brokerName} (${row.source_file})`
+        : `Imported from ${brokerName}`;
       let trade = await createTrade({
         symbol: row.symbol,
         side: row.side,
