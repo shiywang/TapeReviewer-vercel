@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0e1621;
+  --paper: #f3f5f7;
+  --surface: #ffffff;
+  --line: #d7dee6;
+  --muted: #5b6b7c;
+  --signal: #0f8a7a;
+  --profit: #1b8a4a;
+  --loss: #c23b3b;
+  --warn: #c47e1a;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Source Sans 3", system-ui, sans-serif;
+}
+
+@keyframes count-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-count {
+  animation: count-fade 0.4s ease-out both;
+}
+
+@keyframes slide-accent {
+  from {
+    transform: scaleY(0.4);
+    opacity: 0.4;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.animate-accent {
+  animation: slide-accent 0.18s ease-out both;
+  transform-origin: center;
+}
