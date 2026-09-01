@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:push": "SUPABASE_ACCESS_TOKEN=$(cat .supabase-access-token) npx supabase db push",
+    "db:list": "SUPABASE_ACCESS_TOKEN=$(cat .supabase-access-token) npx supabase migration list",
+    "db:new": "npx supabase migration new"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
