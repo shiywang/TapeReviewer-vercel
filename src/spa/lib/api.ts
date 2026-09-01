@@ -149,17 +149,23 @@ export const api = {
     label?: string;
     source?: "das" | "ibkr";
   }) =>
-    request<{ created: number; net_pnl_total: number; import_batch_id: number }>(
+    request<{
+      created: number;
+      skipped?: number;
+      net_pnl_total: number;
+      import_batch_id: number | null;
+      message?: string;
+    }>(
       "/api/import/das/commit",
       {
         method: "POST",
         body: JSON.stringify(body),
       },
     ),
-  ibkrRequest: () =>
+  ibkrRequest: (scope: "today" | "history" = "today") =>
     request<{ reference_code: string; url: string }>("/api/import/ibkr/request", {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ scope }),
     }),
   ibkrFetch: (ref: string, url?: string) => {
     const q = new URLSearchParams({ ref });

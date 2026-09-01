@@ -59,6 +59,68 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const sb = supabase();
+
+    // Trade-level overlap key: identifies the same round-trip across different
+    // queries (e.g. today's Trade Confirmation sync vs. a later Activity backfill
+    // that both contain the same fills). Price is intentionally excluded — the
+    // two query types can report slightly different average prices for the same
+    // trade, but symbol/side/open/close/qty pin it uniquely enough for one user.
+    const keyOf = (t: {
+      symbol: string;
+      side: string;
+      opened_at: string;
+      closed_at: string;
+      qty: number;
+    }) => `${t.symbol.toUpperCase()}|${t.side}|${t.opened_at}|${t.closed_at}|${t.qty}`;
+
+    const { data: existingTrades, error: exFetchErr } = await sb
+      .from("trade")
+      .select("symbol, side, opened_at, closed_at, qty")
+      .eq("account_id", accountId);
+    if (exFetchErr) throw new ApiError(exFetchErr.message, 500);
+    const existingKeys = new Set((existingTrades || []).map((t) => keyOf(t as never)));
+
+    // Build rows, dropping any that already exist and any duplicated within this
+    // same payload. Bulk-insert the rest (two inserts total → no per-trade loop
+    // that would time out on a large history).
+    const seenInPayload = new Set<string>();
+    const newItems = payload.trades
+      .map((row) => {
+        const side = row.side ?? "LONG";
+        const fees = row.fees ?? 0;
+        let gross: number;
+        let net: number;
+        let roi: number;
+        if (row.net_pnl !== null && row.net_pnl !== undefined) {
+          net = row.net_pnl;
+          gross = row.gross_pnl != null ? row.gross_pnl : row.net_pnl + fees;
+          const notional = Math.abs(row.avg_entry * row.qty) || 1.0;
+          roi = row.net_roi != null ? row.net_roi : (row.net_pnl / notional) * 100;
+        } else {
+          [gross, net, roi] = computePnl(side, row.qty, row.avg_entry, row.avg_exit, fees);
+        }
+        const key = keyOf({ ...row, side });
+        return { row, side, fees, gross, net, roi, key };
+      })
+      .filter((it) => {
+        if (existingKeys.has(it.key) || seenInPayload.has(it.key)) return false;
+        seenInPayload.add(it.key);
+        return true;
+      });
+
+    const skipped = payload.trades.length - newItems.length;
+    if (!newItems.length) {
+      return json({
+        created: 0,
+        skipped,
+        net_pnl_total: 0,
+        import_batch_id: null,
+        fingerprint,
+        message: `All ${skipped} trade(s) already imported — nothing new.`,
+      });
+    }
+
     let batch;
     try {
       batch = await createBatch({
@@ -66,8 +128,8 @@ export async function POST(req: NextRequest) {
         fingerprint,
         trade_fingerprint: tradeFp,
         label,
-        trade_count: payload.trades.length,
-        net_pnl: round2(payload.trades.reduce((a, t) => a + (t.net_pnl || 0), 0)),
+        trade_count: newItems.length,
+        net_pnl: round2(newItems.reduce((a, it) => a + it.net, 0)),
         account_id: accountId,
       });
     } catch (err) {
@@ -77,47 +139,26 @@ export async function POST(req: NextRequest) {
       throw err;
     }
 
-    const sb = supabase();
-
-    // Build all trade rows up front, then bulk-insert. A per-trade loop with
-    // several sequential Supabase calls each times out on large imports (e.g. a
-    // full IBKR history of hundreds of trades); two bulk inserts stay well within
-    // the serverless budget.
-    const tradeRows = payload.trades.map((row) => {
-      const side = row.side ?? "LONG";
-      const fees = row.fees ?? 0;
-      let gross: number;
-      let net: number;
-      let roi: number;
-      if (row.net_pnl !== null && row.net_pnl !== undefined) {
-        net = row.net_pnl;
-        gross = row.gross_pnl != null ? row.gross_pnl : row.net_pnl + fees;
-        const notional = Math.abs(row.avg_entry * row.qty) || 1.0;
-        roi = row.net_roi != null ? row.net_roi : (row.net_pnl / notional) * 100;
-      } else {
-        [gross, net, roi] = computePnl(side, row.qty, row.avg_entry, row.avg_exit, fees);
-      }
-      return {
-        account_id: accountId,
-        import_batch_id: batch.id,
-        symbol: row.symbol.toUpperCase(),
-        side,
-        opened_at: row.opened_at,
-        closed_at: row.closed_at,
-        qty: row.qty,
-        avg_entry: row.avg_entry,
-        avg_exit: row.avg_exit,
-        gross_pnl: round2(gross),
-        fees,
-        net_pnl: round2(net),
-        net_roi: round4(roi),
-        notes: row.source_file
-          ? `Imported from ${brokerName} (${row.source_file})`
-          : `Imported from ${brokerName}`,
-        profit_target: null,
-        stop_loss: null,
-      };
-    });
+    const tradeRows = newItems.map((it) => ({
+      account_id: accountId,
+      import_batch_id: batch.id,
+      symbol: it.row.symbol.toUpperCase(),
+      side: it.side,
+      opened_at: it.row.opened_at,
+      closed_at: it.row.closed_at,
+      qty: it.row.qty,
+      avg_entry: it.row.avg_entry,
+      avg_exit: it.row.avg_exit,
+      gross_pnl: round2(it.gross),
+      fees: it.fees,
+      net_pnl: round2(it.net),
+      net_roi: round4(it.roi),
+      notes: it.row.source_file
+        ? `Imported from ${brokerName} (${it.row.source_file})`
+        : `Imported from ${brokerName}`,
+      profit_target: null,
+      stop_loss: null,
+    }));
 
     const { data: inserted, error: insErr } = await sb
       .from("trade")
@@ -127,17 +168,15 @@ export async function POST(req: NextRequest) {
     const ids = (inserted || []) as { id: number }[];
 
     // Two synthetic executions per trade (entry + exit), same as createTrade().
-    // PostgREST returns inserted rows in insertion order, so ids[i] ↔ trades[i].
+    // PostgREST returns inserted rows in insertion order, so ids[i] ↔ newItems[i].
     const execRows: Record<string, unknown>[] = [];
     ids.forEach((t, i) => {
-      const row = payload.trades[i];
-      const side = row.side ?? "LONG";
-      const fees = row.fees ?? 0;
-      const buySide = side === "LONG" ? "BUY" : "SELL";
-      const sellSide = side === "LONG" ? "SELL" : "BUY";
+      const it = newItems[i];
+      const buySide = it.side === "LONG" ? "BUY" : "SELL";
+      const sellSide = it.side === "LONG" ? "SELL" : "BUY";
       execRows.push(
-        { trade_id: t.id, executed_at: row.opened_at, side: buySide, qty: row.qty, price: row.avg_entry, fee: fees / 2 },
-        { trade_id: t.id, executed_at: row.closed_at, side: sellSide, qty: row.qty, price: row.avg_exit, fee: fees / 2 },
+        { trade_id: t.id, executed_at: it.row.opened_at, side: buySide, qty: it.row.qty, price: it.row.avg_entry, fee: it.fees / 2 },
+        { trade_id: t.id, executed_at: it.row.closed_at, side: sellSide, qty: it.row.qty, price: it.row.avg_exit, fee: it.fees / 2 },
       );
     });
     if (execRows.length) {
@@ -147,7 +186,8 @@ export async function POST(req: NextRequest) {
 
     return json({
       created: ids.length,
-      net_pnl_total: round2(tradeRows.reduce((a, r) => a + r.net_pnl, 0)),
+      skipped,
+      net_pnl_total: round2(newItems.reduce((a, it) => a + it.net, 0)),
       import_batch_id: batch.id,
       fingerprint,
     });

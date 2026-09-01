@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { handle, httpError, json, requireAuth } from "@/lib/server/http";
-import { FlexError, flexCredentials, sendRequest } from "@/lib/server/ibkrFlex";
+import { FlexError, flexToken, flexQueryId, sendRequest, type FlexScope } from "@/lib/server/ibkrFlex";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,9 +14,11 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as {
       token?: string;
       query_id?: string;
+      scope?: FlexScope;
     };
     try {
-      const { token, queryId } = flexCredentials({ token: body.token, queryId: body.query_id });
+      const token = flexToken(body.token);
+      const queryId = flexQueryId(body.scope ?? "today", body.query_id);
       const { referenceCode, url } = await sendRequest(token, queryId);
       return json({ reference_code: referenceCode, url });
     } catch (err) {

@@ -37,7 +37,7 @@ export default function ImportPage() {
 
   // IBKR Flex: kick off SendRequest, then poll GetStatement until the statement
   // is generated. Reuses the DAS preview + commit path (same round-trip engine).
-  const runIbkr = async () => {
+  const runIbkr = async (scope: "today" | "history" = "today") => {
     setBusy(true);
     setError("");
     setResult("");
@@ -45,7 +45,7 @@ export default function ImportPage() {
     setDasPreview(null);
     setSyncStatus("Requesting statement…");
     try {
-      const { reference_code, url } = await api.ibkrRequest();
+      const { reference_code, url } = await api.ibkrRequest(scope);
       const deadline = Date.now() + 90_000;
       for (let attempt = 1; ; attempt++) {
         const res = await api.ibkrFetch(reference_code, url);
@@ -103,10 +103,18 @@ export default function ImportPage() {
           source_file: t.source_file,
         })),
       });
-      setResult(`Imported ${res.created} DAS trades · ${formatMoney(res.net_pnl_total)} (batch #${res.import_batch_id})`);
+      const broker = mode === "ibkr" ? "IBKR" : "DAS";
+      const skippedNote = res.skipped ? ` · skipped ${res.skipped} already-imported` : "";
+      if (res.created === 0) {
+        setResult(res.message || `Nothing new — all ${res.skipped ?? 0} trade(s) already imported.`);
+      } else {
+        setResult(
+          `Imported ${res.created} ${broker} trades · ${formatMoney(res.net_pnl_total)} (batch #${res.import_batch_id})${skippedNote}`,
+        );
+      }
       setHistoryKey((k) => k + 1);
       // refresh duplicate state
-      setDasPreview({ ...dasPreview, already_imported: true, existing_batch: { id: res.import_batch_id } as never });
+      setDasPreview({ ...dasPreview, already_imported: true, existing_batch: { id: res.import_batch_id ?? 0 } as never });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Commit failed");
     } finally {
@@ -206,17 +214,31 @@ export default function ImportPage() {
             <div className="rounded-xl border-2 border-dashed border-signal/40 bg-signal/5 px-4 py-8 text-center">
               <div className="font-display text-lg font-bold text-signal">Sync from Interactive Brokers</div>
               <p className="mx-auto mt-1 max-w-md text-sm text-muted">
-                Pulls your configured Flex Query over the IBKR Flex Web Service and matches fills into
-                round-trip trades. Fastest with a Trade Confirmation Flex Query.
+                Pulls your Flex Query over the IBKR Flex Web Service and matches fills into round-trip
+                trades. Already-imported trades are skipped automatically.
               </p>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={runIbkr}
-                className="mt-4 rounded-lg bg-signal px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              >
-                {busy ? "Syncing…" : "Sync now"}
-              </button>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => runIbkr("today")}
+                  className="rounded-lg bg-signal px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {busy ? "Syncing…" : "Sync today"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => runIbkr("history")}
+                  className="rounded-lg border border-line px-5 py-2 text-sm font-semibold text-ink hover:bg-paper disabled:opacity-50"
+                >
+                  Backfill history
+                </button>
+              </div>
+              <p className="mx-auto mt-2 max-w-md text-[11px] text-muted">
+                <span className="font-semibold">Sync today</span> uses your Trade Confirmation query (current-day fills);{" "}
+                <span className="font-semibold">Backfill history</span> uses your Activity query (settled prior days).
+              </p>
               {syncStatus && <p className="mt-2 text-xs font-mono text-muted">{syncStatus}</p>}
             </div>
           )}

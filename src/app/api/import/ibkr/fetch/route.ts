@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { handle, httpError, json, requireAuth } from "@/lib/server/http";
-import { FlexError, flexCredentials, fetchStatement, buildFlexPreview } from "@/lib/server/ibkrFlex";
+import { FlexError, flexToken, fetchStatement, buildFlexPreview } from "@/lib/server/ibkrFlex";
 import { findBatchByFingerprint } from "@/lib/server/importBatches";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     if (!ref) return httpError("Missing reference code", 400);
 
     try {
-      const { token } = flexCredentials();
+      const token = flexToken();
       const outcome = await fetchStatement(token, ref, url);
       if (outcome.status === "pending") {
         return json({ status: "pending", retry_after_ms: outcome.retryAfterMs, code: outcome.code });

@@ -318,17 +318,27 @@ export function buildFlexPreview(statement: string): FlexImportPreview {
   };
 }
 
-/** Read Flex credentials from env, with optional per-request override. */
-export function flexCredentials(override?: { token?: string; queryId?: string }): {
-  token: string;
-  queryId: string;
-} {
-  const token = (override?.token || process.env.IBKR_FLEX_TOKEN || "").trim();
-  const queryId = (override?.queryId || process.env.IBKR_FLEX_QUERY_ID || "").trim();
-  if (!token || !queryId) {
+/** The Flex Web Service token (needed by both request and fetch). */
+export function flexToken(override?: string): string {
+  const token = (override || process.env.IBKR_FLEX_TOKEN || "").trim();
+  if (!token) throw new FlexError("IBKR Flex is not configured. Set IBKR_FLEX_TOKEN.");
+  return token;
+}
+
+// Two queries: "today" = a fast Trade Confirmation query (intraday, current-day
+// fills), "history" = an Activity query for backfilling settled prior-day data.
+// Overlap between the two is de-duplicated at commit time (trade-level key).
+export type FlexScope = "today" | "history";
+
+/** Pick the Flex query id for a scope, falling back to whichever is configured. */
+export function flexQueryId(scope: FlexScope = "today", override?: string): string {
+  const today = (process.env.IBKR_FLEX_QUERY_ID || "").trim();
+  const history = (process.env.IBKR_FLEX_QUERY_ID_HISTORY || "").trim();
+  const queryId = (override || (scope === "history" ? history : today) || today || history).trim();
+  if (!queryId) {
     throw new FlexError(
-      "IBKR Flex is not configured. Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID.",
+      "No IBKR Flex query configured. Set IBKR_FLEX_QUERY_ID (today) and/or IBKR_FLEX_QUERY_ID_HISTORY.",
     );
   }
-  return { token, queryId };
+  return queryId;
 }
