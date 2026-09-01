@@ -240,9 +240,14 @@ export function parseFlexCsv(text: string, sourceLabel: string): FlexExec[] {
   const header = splitCsvLine(lines[0]);
   const col = new Map<string, number>();
   header.forEach((h, i) => col.set(h.trim(), i));
-  const at = (row: string[], name: string) => {
-    const i = col.get(name);
-    return i != null && i < row.length ? row[i] : "";
+  // Column names differ between Activity Flex (TradePrice/DateTime/IBCommission)
+  // and Trade Confirmation Flex (Price/Date-Time/Commission); accept either.
+  const at = (row: string[], ...names: string[]) => {
+    for (const name of names) {
+      const i = col.get(name);
+      if (i != null && i < row.length) return row[i];
+    }
+    return "";
   };
   const hasLod = col.has("LevelOfDetail");
 
@@ -253,14 +258,14 @@ export function parseFlexCsv(text: string, sourceLabel: string): FlexExec[] {
     // individual fills we round-trip; other levels are summaries/lots/orders.
     if (hasLod && at(row, "LevelOfDetail") !== "EXECUTION") continue;
     const ex = makeExec({
-      symbol: at(row, "Symbol") || at(row, "UnderlyingSymbol"),
+      symbol: at(row, "Symbol", "UnderlyingSymbol"),
       buySell: at(row, "Buy/Sell"),
-      tradePrice: at(row, "TradePrice"),
+      tradePrice: at(row, "TradePrice", "Price"),
       quantity: at(row, "Quantity"),
-      ibCommission: at(row, "IBCommission"),
+      ibCommission: at(row, "IBCommission", "Commission"),
       fifoPnlRealized: at(row, "FifoPnlRealized"),
       tradeDate: at(row, "TradeDate"),
-      dateTime: at(row, "DateTime"),
+      dateTime: at(row, "DateTime", "Date/Time"),
       sourceLabel,
     });
     if (ex) execs.push(ex);
