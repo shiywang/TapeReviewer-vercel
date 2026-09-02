@@ -3,6 +3,7 @@ import {
   createChart,
   CandlestickSeries,
   LineSeries,
+  HistogramSeries,
   createSeriesMarkers,
   LineStyle,
   type IChartApi,
@@ -92,6 +93,24 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
             high: b.h,
             low: b.l,
             close: b.c,
+          })),
+        );
+
+        // Volume histogram in the bottom ~20% (TradingView-style): its own overlay
+        // price scale, and the price candles compressed to the top 80%.
+        chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.06, bottom: 0.22 } });
+        const volSeries = chart.addSeries(HistogramSeries, {
+          priceFormat: { type: "volume" },
+          priceScaleId: "volume",
+          lastValueVisible: false,
+          priceLineVisible: false,
+        });
+        chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+        volSeries.setData(
+          bars.map((b) => ({
+            time: (b.t + off) as UTCTimestamp,
+            value: b.v,
+            color: b.c >= b.o ? "rgba(15,157,107,0.45)" : "rgba(229,72,77,0.45)",
           })),
         );
 
