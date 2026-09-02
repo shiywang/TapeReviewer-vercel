@@ -4,7 +4,6 @@ import {
   CandlestickSeries,
   LineSeries,
   HistogramSeries,
-  createSeriesMarkers,
   LineStyle,
   type IChartApi,
   type UTCTimestamp,
@@ -13,6 +12,7 @@ import { api } from "../lib/api";
 import type { Trade } from "../types";
 import { formatTime } from "../lib/format";
 import { SessionBands, type SessionBand, type SessionLine } from "./sessionBandsPrimitive";
+import { TradeMarkers } from "./tradeMarkersPrimitive";
 
 // Options symbols (OCC style, e.g. "SPXW  260413C06850000") aren't equity tickers;
 // the MVP charts equities only.
@@ -165,26 +165,15 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
         if (bands.length || lines.length) series.attachPrimitive(new SessionBands(bands, lines));
         setHasExtended(bands.length > 0);
 
-        // Entry/exit markers, snapped to the minute so they sit on a candle.
+        // Precise entry/exit arrows: tip lands exactly at (fill time, fill price).
         const entryT = (Math.floor(etWallSec(trade.opened_at) / 60) * 60) as UTCTimestamp;
         const exitT = (Math.floor(etWallSec(trade.closed_at) / 60) * 60) as UTCTimestamp;
-        const entryUp = trade.side === "LONG";
-        createSeriesMarkers(series, [
-          {
-            time: entryT,
-            position: entryUp ? "belowBar" : "aboveBar",
-            color: "#0F9D6B",
-            shape: entryUp ? "arrowUp" : "arrowDown",
-            text: `Entry ${trade.avg_entry}`,
-          },
-          {
-            time: exitT,
-            position: entryUp ? "aboveBar" : "belowBar",
-            color: "#E5484D",
-            shape: entryUp ? "arrowDown" : "arrowUp",
-            text: `Exit ${trade.avg_exit}`,
-          },
-        ]);
+        series.attachPrimitive(
+          new TradeMarkers([
+            { time: entryT, price: trade.avg_entry, color: "#0F9D6B" },
+            { time: exitT, price: trade.avg_exit, color: "#E5484D" },
+          ]),
+        );
 
         series.createPriceLine({
           price: trade.avg_entry,
