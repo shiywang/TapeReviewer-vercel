@@ -114,8 +114,8 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
         });
 
         const vwapSeries = chart.addSeries(LineSeries, {
-          color: "#7C5CFC",
-          lineWidth: 2,
+          color: "#111827",
+          lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
@@ -123,8 +123,8 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
         vwapSeries.setData(vwapData);
 
         const emaSeries = chart.addSeries(LineSeries, {
-          color: "#F59E0B",
-          lineWidth: 2,
+          color: "#2563EB",
+          lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
@@ -240,8 +240,8 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           {status && <p className="mt-2 text-xs text-muted">{status}</p>}
           {barCount > 0 && (
             <p className="mt-1 text-[11px] text-muted">
-              {barCount} bars · <span style={{ color: "#7C5CFC" }}>VWAP</span> ·{" "}
-              <span style={{ color: "#F59E0B" }}>EMA9</span> · green/red dashed = avg entry/exit
+              {barCount} bars · <span style={{ color: "#111827" }}>VWAP</span> ·{" "}
+              <span style={{ color: "#2563EB" }}>EMA9</span> · green/red dashed = avg entry/exit
               {hasExtended && " · shaded = pre/post-market (09:30–16:00 ET lines)"}
             </p>
           )}
