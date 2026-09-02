@@ -162,6 +162,12 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+  ohlc: (symbol: string, date: string) =>
+    request<{
+      bars: { t: number; o: number; h: number; l: number; c: number; v: number }[];
+      source: string;
+      cached: boolean;
+    }>(`/api/ohlc?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(date)}`),
   ibkrRequest: (scope: "today" | "history" = "today") =>
     request<{ reference_code: string; url: string }>("/api/import/ibkr/request", {
       method: "POST",

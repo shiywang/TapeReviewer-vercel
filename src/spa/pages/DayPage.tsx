@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import ChartPlaceholder from "../components/ChartPlaceholder";
+import MarketChart from "../components/MarketChart";
 import VideoLinkModal from "../components/VideoLinkModal";
 import SessionVerdict from "../components/SessionVerdict";
 import TapeStrip from "../components/TapeStrip";
@@ -168,6 +168,7 @@ export default function DayPage({ refreshKey }: { refreshKey: number }) {
 
             {/* Workbench */}
             <section className="space-y-3">
+              <MarketChart trade={selected} date={date} />
               <VideoPlayer
                 key={selected?.id ?? "none"}
                 relativePath={selected?.video_path || null}
@@ -184,7 +185,6 @@ export default function DayPage({ refreshKey }: { refreshKey: number }) {
                   await load();
                 }}
               />
-              <ChartPlaceholder trade={selected} />
             </section>
 
             {/* Stats / notes */}

@@ -1,0 +1,192 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  createChart,
+  CandlestickSeries,
+  createSeriesMarkers,
+  LineStyle,
+  type IChartApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
+import { api } from "../lib/api";
+import type { Trade } from "../types";
+import { formatTime } from "../lib/format";
+
+// Options symbols (OCC style, e.g. "SPXW  260413C06850000") aren't equity tickers;
+// the MVP charts equities only.
+function isOption(symbol: string): boolean {
+  return /\s/.test(symbol) || /\d{6}[CP]\d/.test(symbol);
+}
+
+// Naive ET timestamp string ("2026-09-01T09:39:15") → the ET wall-clock expressed
+// as a UNIX second (i.e. parsed as if UTC). Bars are shifted the same way below, so
+// markers land on the right candle and the axis reads ET.
+function etWallSec(naive: string): number {
+  return Math.floor(Date.parse(naive.replace(/Z?$/, "") + "Z") / 1000);
+}
+
+// ET UTC-offset (seconds, negative) for a given instant — shifts real UTC bar times
+// to ET wall-clock so lightweight-charts (which renders in UTC) shows ET.
+function etOffsetSec(unixSec: number): number {
+  const ms = unixSec * 1000;
+  const u = Date.parse(new Date(ms).toLocaleString("en-US", { timeZone: "UTC" }));
+  const e = Date.parse(new Date(ms).toLocaleString("en-US", { timeZone: "America/New_York" }));
+  return Math.round((e - u) / 1000);
+}
+
+export default function MarketChart({ trade, date }: { trade: Trade | null; date: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<string>("");
+  const [barCount, setBarCount] = useState(0);
+
+  useEffect(() => {
+    if (!trade || !containerRef.current) return;
+    if (isOption(trade.symbol)) {
+      setStatus("No chart for options yet — equities only.");
+      setBarCount(0);
+      return;
+    }
+
+    let chart: IChartApi | null = null;
+    let disposed = false;
+    setStatus("Loading chart…");
+    setBarCount(0);
+
+    api
+      .ohlc(trade.symbol, date)
+      .then(({ bars }) => {
+        if (disposed || !containerRef.current) return;
+        if (!bars.length) {
+          setStatus("No bars for this day (data is available after market close).");
+          return;
+        }
+        const off = etOffsetSec(bars[Math.floor(bars.length / 2)].t);
+
+        chart = createChart(containerRef.current, {
+          height: 260,
+          layout: { background: { color: "transparent" }, textColor: "#5B6B7C", fontSize: 11 },
+          grid: { vertLines: { color: "#EEF2F6" }, horzLines: { color: "#EEF2F6" } },
+          rightPriceScale: { borderColor: "#D7DEE6" },
+          timeScale: { borderColor: "#D7DEE6", timeVisible: true, secondsVisible: false },
+          crosshair: { mode: 0 },
+        });
+
+        const series = chart.addSeries(CandlestickSeries, {
+          upColor: "#0F9D6B",
+          downColor: "#E5484D",
+          borderUpColor: "#0F9D6B",
+          borderDownColor: "#E5484D",
+          wickUpColor: "#0F9D6B",
+          wickDownColor: "#E5484D",
+        });
+        series.setData(
+          bars.map((b) => ({
+            time: (b.t + off) as UTCTimestamp,
+            open: b.o,
+            high: b.h,
+            low: b.l,
+            close: b.c,
+          })),
+        );
+
+        // Entry/exit markers, snapped to the minute so they sit on a candle.
+        const entryT = (Math.floor(etWallSec(trade.opened_at) / 60) * 60) as UTCTimestamp;
+        const exitT = (Math.floor(etWallSec(trade.closed_at) / 60) * 60) as UTCTimestamp;
+        const entryUp = trade.side === "LONG";
+        createSeriesMarkers(series, [
+          {
+            time: entryT,
+            position: entryUp ? "belowBar" : "aboveBar",
+            color: "#0F9D6B",
+            shape: entryUp ? "arrowUp" : "arrowDown",
+            text: `Entry ${trade.avg_entry}`,
+          },
+          {
+            time: exitT,
+            position: entryUp ? "aboveBar" : "belowBar",
+            color: "#E5484D",
+            shape: entryUp ? "arrowDown" : "arrowUp",
+            text: `Exit ${trade.avg_exit}`,
+          },
+        ]);
+
+        series.createPriceLine({
+          price: trade.avg_entry,
+          color: "#0F9D6B",
+          lineStyle: LineStyle.Dashed,
+          lineWidth: 1,
+          axisLabelVisible: true,
+          title: "entry",
+        });
+        series.createPriceLine({
+          price: trade.avg_exit,
+          color: "#E5484D",
+          lineStyle: LineStyle.Dashed,
+          lineWidth: 1,
+          axisLabelVisible: true,
+          title: "exit",
+        });
+
+        // Zoom to the trade window ±30 min.
+        chart.timeScale().setVisibleRange({
+          from: (entryT - 1800) as UTCTimestamp,
+          to: (exitT + 1800) as UTCTimestamp,
+        });
+
+        setStatus("");
+        setBarCount(bars.length);
+      })
+      .catch((err) => {
+        if (!disposed) setStatus(err instanceof Error ? err.message : "Chart failed to load");
+      });
+
+    const ro = new ResizeObserver(() => {
+      if (chart && containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+    });
+    if (containerRef.current) ro.observe(containerRef.current);
+
+    return () => {
+      disposed = true;
+      ro.disconnect();
+      chart?.remove();
+    };
+  }, [trade, date]);
+
+  return (
+    <div className="rounded-xl border border-line bg-surface p-4 shadow-panel">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-ink">
+          {trade ? `${trade.symbol} · 1-min` : "Market chart"}
+        </h3>
+        <div className="flex items-center gap-2">
+          {trade && (
+            <span className="font-mono text-[11px] text-muted">
+              {formatTime(trade.opened_at)} → {formatTime(trade.closed_at)}
+            </span>
+          )}
+          {/* TradingView attribution (required by Lightweight Charts terms). */}
+          <a
+            href="https://www.tradingview.com/lightweight-charts/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-[10px] text-muted hover:text-signal"
+          >
+            charts by TradingView
+          </a>
+        </div>
+      </div>
+      {!trade ? (
+        <p className="mt-3 text-sm text-muted">Select a trade to see its chart.</p>
+      ) : (
+        <>
+          <div ref={containerRef} className="mt-3 w-full" style={{ minHeight: 260 }} />
+          {status && <p className="mt-2 text-xs text-muted">{status}</p>}
+          {barCount > 0 && (
+            <p className="mt-1 text-[11px] text-muted">
+              {barCount} bars · green line = avg entry, red = avg exit
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
