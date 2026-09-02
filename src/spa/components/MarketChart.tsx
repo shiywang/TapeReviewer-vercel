@@ -10,6 +10,7 @@ import {
 import { api } from "../lib/api";
 import type { Trade } from "../types";
 import { formatTime } from "../lib/format";
+import { SessionBands, type SessionBand, type SessionLine } from "./sessionBandsPrimitive";
 
 // Options symbols (OCC style, e.g. "SPXW  260413C06850000") aren't equity tickers;
 // the MVP charts equities only.
@@ -81,33 +82,30 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           wickDownColor: "#E5484D",
         });
 
-        // Regular US session is 09:30–16:00 ET; bars outside it are pre/post-market.
-        // Lightweight Charts has no session knob, but candlesticks accept per-bar
-        // colors — so extended-hours bars get a muted palette while regular-hours
-        // bars fall through to the series' solid colors above.
-        const REG_OPEN = 9 * 60 + 30; // 570
-        const REG_CLOSE = 16 * 60; // 960
-        const MUTED_UP = "#9FD6C4";
-        const MUTED_DOWN = "#F0B4B6";
-        let sawExtended = false;
         series.setData(
-          bars.map((b) => {
-            const etMin = Math.floor((((b.t + off) % 86400) + 86400) % 86400 / 60);
-            const extended = etMin < REG_OPEN || etMin >= REG_CLOSE;
-            const base = {
-              time: (b.t + off) as UTCTimestamp,
-              open: b.o,
-              high: b.h,
-              low: b.l,
-              close: b.c,
-            };
-            if (!extended) return base;
-            sawExtended = true;
-            const c = b.c >= b.o ? MUTED_UP : MUTED_DOWN;
-            return { ...base, color: c, borderColor: c, wickColor: c };
-          }),
+          bars.map((b) => ({
+            time: (b.t + off) as UTCTimestamp,
+            open: b.o,
+            high: b.h,
+            low: b.l,
+            close: b.c,
+          })),
         );
-        setHasExtended(sawExtended);
+
+        // Shade pre/post-market regions and mark the 09:30 / 16:00 ET boundaries.
+        // Times share the bars' "ET wall-clock as UTC" basis (etWallSec).
+        const dayOpen = etWallSec(`${date}T09:30:00`) as UTCTimestamp;
+        const dayClose = etWallSec(`${date}T16:00:00`) as UTCTimestamp;
+        const firstT = (bars[0].t + off) as UTCTimestamp;
+        const lastT = (bars[bars.length - 1].t + off) as UTCTimestamp;
+        const bands: SessionBand[] = [];
+        if (firstT < dayOpen) bands.push({ from: firstT, to: dayOpen, color: "rgba(91,107,124,0.07)" });
+        if (lastT > dayClose) bands.push({ from: dayClose, to: lastT, color: "rgba(91,107,124,0.07)" });
+        const lines: SessionLine[] = [];
+        if (firstT < dayOpen) lines.push({ time: dayOpen, color: "rgba(91,107,124,0.45)" });
+        if (lastT > dayClose) lines.push({ time: dayClose, color: "rgba(91,107,124,0.45)" });
+        if (bands.length || lines.length) series.attachPrimitive(new SessionBands(bands, lines));
+        setHasExtended(bands.length > 0);
 
         // Entry/exit markers, snapped to the minute so they sit on a candle.
         const entryT = (Math.floor(etWallSec(trade.opened_at) / 60) * 60) as UTCTimestamp;
@@ -204,7 +202,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           {barCount > 0 && (
             <p className="mt-1 text-[11px] text-muted">
               {barCount} bars · green line = avg entry, red = avg exit
-              {hasExtended && " · muted candles = pre/post-market"}
+              {hasExtended && " · shaded = pre/post-market (09:30–16:00 ET lines)"}
             </p>
           )}
         </>
