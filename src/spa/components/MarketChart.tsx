@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createChart,
   CandlestickSeries,
+  LineSeries,
   createSeriesMarkers,
   LineStyle,
   type IChartApi,
@@ -93,6 +94,42 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
             close: b.c,
           })),
         );
+
+        // Session VWAP (cumulative typical-price × volume, anchored at the first
+        // bar) and EMA(9) of close — both computed from the 1-min bars.
+        const k = 2 / (9 + 1);
+        let cumPV = 0;
+        let cumV = 0;
+        let ema = bars[0].c;
+        const vwapData: { time: UTCTimestamp; value: number }[] = [];
+        const emaData: { time: UTCTimestamp; value: number }[] = [];
+        bars.forEach((b, i) => {
+          const time = (b.t + off) as UTCTimestamp;
+          const typical = (b.h + b.l + b.c) / 3;
+          cumPV += typical * b.v;
+          cumV += b.v;
+          if (cumV > 0) vwapData.push({ time, value: cumPV / cumV });
+          ema = i === 0 ? b.c : b.c * k + ema * (1 - k);
+          emaData.push({ time, value: ema });
+        });
+
+        const vwapSeries = chart.addSeries(LineSeries, {
+          color: "#7C5CFC",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        vwapSeries.setData(vwapData);
+
+        const emaSeries = chart.addSeries(LineSeries, {
+          color: "#F59E0B",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        emaSeries.setData(emaData);
 
         // Shade pre/post-market regions and mark the 09:30 / 16:00 ET boundaries.
         // Times share the bars' "ET wall-clock as UTC" basis (etWallSec).
@@ -203,7 +240,8 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           {status && <p className="mt-2 text-xs text-muted">{status}</p>}
           {barCount > 0 && (
             <p className="mt-1 text-[11px] text-muted">
-              {barCount} bars · green line = avg entry, red = avg exit
+              {barCount} bars · <span style={{ color: "#7C5CFC" }}>VWAP</span> ·{" "}
+              <span style={{ color: "#F59E0B" }}>EMA9</span> · green/red dashed = avg entry/exit
               {hasExtended && " · shaded = pre/post-market (09:30–16:00 ET lines)"}
             </p>
           )}
