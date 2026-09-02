@@ -35,14 +35,24 @@ function etDate(unixSec: number): string {
   }).format(new Date(unixSec * 1000));
 }
 
+// Stored symbols are either plain equities ("NVDA") or OCC option strings
+// ("META  260803C00570000"); the latter map to Massive/Polygon option tickers
+// ("O:META260803C00570000").
+export function toMassiveTicker(symbol: string): string {
+  const compact = symbol.replace(/\s+/g, "").toUpperCase();
+  if (/^[A-Z.]{1,6}\d{6}[CP]\d{8}$/.test(compact)) return `O:${compact}`;
+  return symbol.trim().toUpperCase();
+}
+
 async function fetchFromMassive(symbol: string, date: string): Promise<Bar[]> {
   const key = (process.env.MASSIVE_API_KEY || "").trim();
   if (!key) throw new ApiError("Market data not configured. Set MASSIVE_API_KEY.", 400);
 
+  const ticker = toMassiveTicker(symbol);
   const from = date;
   const to = nextDay(date); // capture ET pre/post-market that spills across UTC midnight
   const url = new URL(
-    `${BASE}/v2/aggs/ticker/${encodeURIComponent(symbol)}/range/1/minute/${from}/${to}`,
+    `${BASE}/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/1/minute/${from}/${to}`,
   );
   url.searchParams.set("adjusted", "true");
   url.searchParams.set("sort", "asc");

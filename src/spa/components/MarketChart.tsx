@@ -14,10 +14,12 @@ import { formatTime } from "../lib/format";
 import { SessionBands, type SessionBand, type SessionLine } from "./sessionBandsPrimitive";
 import { TradeMarkers } from "./tradeMarkersPrimitive";
 
-// Options symbols (OCC style, e.g. "SPXW  260413C06850000") aren't equity tickers;
-// the MVP charts equities only.
-function isOption(symbol: string): boolean {
-  return /\s/.test(symbol) || /\d{6}[CP]\d/.test(symbol);
+// Human-readable label: OCC option strings → "META 570C 26-08-03", else the ticker.
+function displaySymbol(symbol: string): string {
+  const m = symbol.replace(/\s+/g, "").toUpperCase().match(/^([A-Z.]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/);
+  if (!m) return symbol.trim();
+  const [, root, yy, mm, dd, cp, strike] = m;
+  return `${root} ${Number(strike) / 1000}${cp} ${yy}-${mm}-${dd}`;
 }
 
 // Naive ET timestamp string ("2026-09-01T09:39:15") → the ET wall-clock expressed
@@ -44,11 +46,6 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
 
   useEffect(() => {
     if (!trade || !containerRef.current) return;
-    if (isOption(trade.symbol)) {
-      setStatus("No chart for options yet — equities only.");
-      setBarCount(0);
-      return;
-    }
 
     let chart: IChartApi | null = null;
     let disposed = false;
@@ -221,7 +218,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
     <div className="rounded-xl border border-line bg-surface p-4 shadow-panel">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-ink">
-          {trade ? `${trade.symbol} · 1-min` : "Market chart"}
+          {trade ? `${displaySymbol(trade.symbol)} · 1-min` : "Market chart"}
         </h3>
         <div className="flex items-center gap-2">
           {trade && (
