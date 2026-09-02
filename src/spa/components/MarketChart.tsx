@@ -81,6 +81,8 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           borderDownColor: "#E5484D",
           wickUpColor: "#0F9D6B",
           wickDownColor: "#E5484D",
+          lastValueVisible: false,
+          priceLineVisible: false,
         });
 
         series.setData(
@@ -177,7 +179,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           color: "#0F9D6B",
           lineStyle: LineStyle.Dashed,
           lineWidth: 1,
-          axisLabelVisible: true,
+          axisLabelVisible: false,
           title: "entry",
         });
         series.createPriceLine({
@@ -185,7 +187,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           color: "#E5484D",
           lineStyle: LineStyle.Dashed,
           lineWidth: 1,
-          axisLabelVisible: true,
+          axisLabelVisible: false,
           title: "exit",
         });
 
