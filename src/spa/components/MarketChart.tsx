@@ -37,6 +37,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string>("");
   const [barCount, setBarCount] = useState(0);
+  const [hasExtended, setHasExtended] = useState(false);
 
   useEffect(() => {
     if (!trade || !containerRef.current) return;
@@ -50,6 +51,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
     let disposed = false;
     setStatus("Loading chart…");
     setBarCount(0);
+    setHasExtended(false);
 
     api
       .ohlc(trade.symbol, date)
@@ -78,15 +80,34 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           wickUpColor: "#0F9D6B",
           wickDownColor: "#E5484D",
         });
+
+        // Regular US session is 09:30–16:00 ET; bars outside it are pre/post-market.
+        // Lightweight Charts has no session knob, but candlesticks accept per-bar
+        // colors — so extended-hours bars get a muted palette while regular-hours
+        // bars fall through to the series' solid colors above.
+        const REG_OPEN = 9 * 60 + 30; // 570
+        const REG_CLOSE = 16 * 60; // 960
+        const MUTED_UP = "#9FD6C4";
+        const MUTED_DOWN = "#F0B4B6";
+        let sawExtended = false;
         series.setData(
-          bars.map((b) => ({
-            time: (b.t + off) as UTCTimestamp,
-            open: b.o,
-            high: b.h,
-            low: b.l,
-            close: b.c,
-          })),
+          bars.map((b) => {
+            const etMin = Math.floor((((b.t + off) % 86400) + 86400) % 86400 / 60);
+            const extended = etMin < REG_OPEN || etMin >= REG_CLOSE;
+            const base = {
+              time: (b.t + off) as UTCTimestamp,
+              open: b.o,
+              high: b.h,
+              low: b.l,
+              close: b.c,
+            };
+            if (!extended) return base;
+            sawExtended = true;
+            const c = b.c >= b.o ? MUTED_UP : MUTED_DOWN;
+            return { ...base, color: c, borderColor: c, wickColor: c };
+          }),
         );
+        setHasExtended(sawExtended);
 
         // Entry/exit markers, snapped to the minute so they sit on a candle.
         const entryT = (Math.floor(etWallSec(trade.opened_at) / 60) * 60) as UTCTimestamp;
@@ -183,6 +204,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
           {barCount > 0 && (
             <p className="mt-1 text-[11px] text-muted">
               {barCount} bars · green line = avg entry, red = avg exit
+              {hasExtended && " · muted candles = pre/post-market"}
             </p>
           )}
         </>
