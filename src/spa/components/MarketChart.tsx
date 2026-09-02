@@ -65,7 +65,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
         const off = etOffsetSec(bars[Math.floor(bars.length / 2)].t);
 
         chart = createChart(containerRef.current, {
-          height: 260,
+          height: 460,
           layout: { background: { color: "transparent" }, textColor: "#5B6B7C", fontSize: 11 },
           grid: { vertLines: { color: "#EEF2F6" }, horzLines: { color: "#EEF2F6" } },
           rightPriceScale: { borderColor: "#D7DEE6" },
@@ -197,7 +197,7 @@ export default function MarketChart({ trade, date }: { trade: Trade | null; date
         <p className="mt-3 text-sm text-muted">Select a trade to see its chart.</p>
       ) : (
         <>
-          <div ref={containerRef} className="mt-3 w-full" style={{ minHeight: 260 }} />
+          <div ref={containerRef} className="mt-3 w-full" style={{ minHeight: 460 }} />
           {status && <p className="mt-2 text-xs text-muted">{status}</p>}
           {barCount > 0 && (
             <p className="mt-1 text-[11px] text-muted">

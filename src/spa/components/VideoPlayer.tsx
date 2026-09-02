@@ -32,11 +32,9 @@ export default function VideoPlayer({
 
   if (disabled) {
     return (
-      <div className="flex min-h-56 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-line bg-paper px-4 py-8 text-center">
-        <div className="font-display text-lg font-bold text-muted">Select a trade</div>
-        <p className="mt-2 max-w-sm text-sm text-muted">
-          {disabledReason || "Each trade has its own recording — pick a trade, then link a video URL."}
-        </p>
+      <div className="flex w-full items-center gap-2 rounded-lg border border-dashed border-line bg-paper px-3 py-2 text-xs text-muted">
+        <span className="font-semibold">Video</span>
+        <span className="truncate">{disabledReason || "Select a trade to link a recording."}</span>
       </div>
     );
   }
@@ -46,15 +44,11 @@ export default function VideoPlayer({
       <button
         type="button"
         onClick={onLink}
-        className="flex min-h-56 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-signal/40 bg-signal/5 px-4 py-8 text-center transition hover:bg-signal/10"
+        className="flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-signal/40 bg-signal/5 px-3 py-2 text-left text-xs transition hover:bg-signal/10"
+        title={label ? `Link a video URL for ${label}` : "Link a video URL for this trade"}
       >
-        <div className="font-display text-lg font-bold text-signal">Link video URL</div>
-        <p className="mt-2 max-w-sm text-sm text-muted">
-          {label
-            ? `Paste a video URL for ${label}. Each trade has its own video.`
-            : "Paste a video URL for this trade. Each trade has its own video."}{" "}
-          A direct .mp4 link plays inline; some hosts (e.g. YouTube) only open in a new tab.
-        </p>
+        <span className="font-semibold text-signal">＋ Link video URL</span>
+        <span className="truncate text-muted">.mp4 plays inline; YouTube/Drive open in a tab</span>
       </button>
     );
   }
